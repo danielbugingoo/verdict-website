@@ -1,12 +1,27 @@
 # newsletter/utils.py
+import base64
+import hashlib
 import logging
 import re
-from django.conf import settings
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
 from datetime import datetime
 
+from django.conf import settings
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+
+from .models import _compress_image_bytes
+
 logger = logging.getLogger(__name__)
+
+# Google Docs' HTML export embeds pasted-in images as base64 data URIs
+# directly in the markup. Matches an <img ...> tag with such a src and
+# captures the surrounding attributes so they can be preserved on rewrite.
+INLINE_IMG_REGEX = re.compile(
+    r'<img([^>]*?)src="data:image/(?:png|jpe?g|gif);base64,(?P<data>[^"]+)"([^>]*?)>',
+    re.IGNORECASE
+)
 
 # Basic regex for top lines like:
 # Title: ...
@@ -117,7 +132,41 @@ def strip_gdoc_html(raw_html: str) -> str:
     return raw_html.strip()
 
 
-def fetch_doc_and_parse_metadata(file_id: str):
+def extract_and_save_inline_images(html: str, article_id) -> str:
+    """
+    Finds base64 data-URI <img> tags left over from Google Docs' HTML export
+    (Drive embeds pasted-in images this way), decodes + compresses each one
+    through the same pipeline as uploaded ImageFields, saves it as a real
+    file under MEDIA_ROOT/article_body_images/<article_id>/<hash>.<ext>, and
+    rewrites the <img src> to point at the saved file's URL.
+
+    Content-hashed filenames make re-fetching idempotent: re-running this on
+    an unchanged image produces the same path, so no duplicate files pile up.
+    """
+    def _replace(match):
+        before_attrs, b64data, after_attrs = match.group(1), match.group('data'), match.group(3)
+        try:
+            raw = base64.b64decode(b64data)
+        except Exception:
+            logger.warning("Failed to decode an inline image in doc export; left as base64.")
+            return match.group(0)
+
+        compressed, ext = _compress_image_bytes(raw)
+        if compressed is None:
+            logger.warning("Failed to compress an inline image in doc export; left as base64.")
+            return match.group(0)
+
+        digest = hashlib.sha1(compressed).hexdigest()[:16]
+        path = f"article_body_images/{article_id}/{digest}{ext}"
+        if not default_storage.exists(path):
+            default_storage.save(path, ContentFile(compressed))
+        url = default_storage.url(path)
+        return f'<img{before_attrs}src="{url}"{after_attrs}>'
+
+    return INLINE_IMG_REGEX.sub(_replace, html)
+
+
+def fetch_doc_and_parse_metadata(file_id: str, article_id=None):
     """
     Export a Google Doc as HTML, parse the top lines for metadata,
     and return (metadata_dict, cleaned_html).
@@ -179,7 +228,11 @@ def fetch_doc_and_parse_metadata(file_id: str):
         elif TYPE_REGEX.match(line):
             metadata['article_type'] = TYPE_REGEX.match(line).group(1)
 
-    # 5. Strip out unwanted wrapper tags & inline styling 
+    # 5. Strip out unwanted wrapper tags & inline styling
     cleaned_html = strip_gdoc_html(exported)
+
+    # 6. Pull any pasted-in images out of the base64 blobs Google embeds and
+    # save them as real, compressed files instead.
+    cleaned_html = extract_and_save_inline_images(cleaned_html, article_id or file_id)
 
     return metadata, cleaned_html

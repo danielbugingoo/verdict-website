@@ -1,0 +1,19 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{% block object-tools-items %}
+  {% if original %}
+  <li>
+    <form method="post" action="{% url 'admin:newsletter_article_fetch_doc' original.pk %}" style="display:inline;">
+      {% csrf_token %}
+      <button type="submit"
+        style="cursor:pointer; border:none; border-radius:15px; padding:3px 12px;
+               background: var(--object-tools-bg); color: var(--object-tools-fg);
+               font-weight:400; font-size:0.6875rem; text-transform:uppercase; letter-spacing:0.5px;">
+        {% translate "Fetch from Google Doc" %}
+      </button>
+    </form>
+  </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

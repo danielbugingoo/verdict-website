@@ -11,18 +11,19 @@ DOC_URL_REGEX = re.compile(r'/document/d/([^/]+)/')
 
 MAX_IMAGE_PX = 1200
 
-def compress_image(image_field, max_px=MAX_IMAGE_PX):
-    """Resize and compress an ImageField in-place. Skips if already small enough."""
-    if not image_field:
-        return
+def _compress_image_bytes(raw_bytes, max_px=MAX_IMAGE_PX, quality=82):
+    """
+    Resize/re-encode raw image bytes. Returns (bytes, ext) where ext is
+    '.jpg' or '.png'. Returns (None, None) if the bytes can't be read as
+    an image.
+    """
     try:
-        image_field.open('rb')
-        img = Image.open(image_field)
-        if img.width <= max_px and img.height <= max_px and image_field.size < 300_000:
-            return
+        img = Image.open(io.BytesIO(raw_bytes))
+        orig_format = img.format or 'JPEG'
+        if img.width <= max_px and img.height <= max_px and len(raw_bytes) < 300_000:
+            return raw_bytes, ('.png' if orig_format == 'PNG' else '.jpg')
         img.thumbnail((max_px, max_px), Image.LANCZOS)
-        fmt = img.format or 'JPEG'
-        if fmt == 'PNG' and img.mode in ('RGBA', 'P'):
+        if orig_format == 'PNG' and img.mode in ('RGBA', 'P'):
             fmt = 'PNG'
         else:
             fmt = 'JPEG'
@@ -31,13 +32,27 @@ def compress_image(image_field, max_px=MAX_IMAGE_PX):
         buf = io.BytesIO()
         save_kwargs = {'optimize': True}
         if fmt == 'JPEG':
-            save_kwargs['quality'] = 82
+            save_kwargs['quality'] = quality
         img.save(buf, format=fmt, **save_kwargs)
-        ext = '.jpg' if fmt == 'JPEG' else '.png'
-        name = re.sub(r'\.[^.]+$', ext, image_field.name)
-        image_field.save(name, ContentFile(buf.getvalue()), save=False)
+        return buf.getvalue(), ('.jpg' if fmt == 'JPEG' else '.png')
     except Exception:
-        pass
+        return None, None
+
+
+def compress_image(image_field, max_px=MAX_IMAGE_PX):
+    """Resize and compress an ImageField in-place. Skips if already small enough."""
+    if not image_field:
+        return
+    try:
+        image_field.open('rb')
+        raw = image_field.read()
+    except Exception:
+        return
+    compressed, ext = _compress_image_bytes(raw, max_px=max_px)
+    if compressed is None or compressed is raw:
+        return
+    name = re.sub(r'\.[^.]+$', ext, image_field.name)
+    image_field.save(name, ContentFile(compressed), save=False)
 
 class Author(models.Model):
     name     = models.CharField(max_length=255, unique=True)
@@ -58,7 +73,7 @@ class Author(models.Model):
     role = models.CharField(
         max_length=50,
         choices=ROLES,
-        default='Contributor'
+        default='contributor'
     )
 
     def save(self, *args, **kwargs):
@@ -136,19 +151,32 @@ class Article(models.Model):
     )
 
     # Google Doc fields
-    doc_url      = models.TextField(blank=True, help_text="Paste the full Google Doc URL here.")
-    doc_id       = models.CharField(max_length=255, blank=True, help_text="Auto-extracted from doc_url")
-    content_html = models.TextField(blank=True, help_text="Fetched HTML content from Google Docs.")
+    doc_url      = models.TextField(
+        blank=True,
+        help_text="Paste the full Google Doc link here, e.g. https://docs.google.com/document/d/XXXXXXXX/edit"
+    )
+    doc_id       = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Auto-filled from the link above. You shouldn't need to edit this."
+    )
+    content_html = models.TextField(
+        blank=True,
+        help_text=(
+            "Auto-generated when you click 'Fetch from Google Doc'. To change the "
+            "article text, edit the Google Doc itself and fetch again — edits made "
+            "directly in this box will be overwritten."
+        )
+    )
 
     is_current_issue = models.BooleanField(default=False, db_index=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        if self.doc_url and not self.doc_id:
+        if self.doc_url:
             match = DOC_URL_REGEX.search(self.doc_url)
-            if match:
+            if match and match.group(1) != self.doc_id:
                 self.doc_id = match.group(1)
 
         if not self.short_title:
