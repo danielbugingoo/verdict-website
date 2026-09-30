@@ -40,7 +40,19 @@
       display: flex;
       justify-content: center;
     }
-    #banner-section a { text-decoration: none; }
+    #banner-section a {
+      text-decoration: none;
+      flex-wrap: wrap;
+      row-gap: 0.4rem;
+      padding: 0 1rem;
+      box-sizing: border-box;
+      max-width: 100%;
+    }
+    #banner-section img { flex-shrink: 0; }
+    #banner-title {
+      font-size: clamp(1.15rem, 6.2vw, 2.1rem);
+      line-height: 1.2;
+    }
 
     #slim-nav { background-color: #ffffff; }
 
@@ -114,7 +126,7 @@
     <div id="banner-section">
       <a href="{% url 'current_issue' %}" style="display:flex; align-items:center; justify-content:center; gap:0.85rem; text-decoration:none; color:inherit;">
         <img src="{% static 'newsletter/logo.png' %}" alt="" style="height:2.5rem; width:auto;">
-        <span style="font-family:'Times New Roman',Times,serif; font-size:2.5rem; font-weight:normal; font-style:italic; letter-spacing:0.03em;">THE VERDICT</span>
+        <span id="banner-title" style="font-family:'Times New Roman',Times,serif; font-weight:normal; font-style:italic; letter-spacing:0.03em;">THE COLUMBIA LAW VERDICT</span>
       </a>
     </div>
     <nav id="slim-nav" class="navbar navbar-expand-md py-1">
