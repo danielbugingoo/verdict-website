@@ -9,7 +9,7 @@ from django.urls import path, reverse
 from django.utils.html import format_html
 
 from .models import Author, Article, DOC_URL_REGEX
-from .utils import fetch_doc_and_parse_metadata
+from .utils import extract_and_save_inline_images, fetch_doc_and_parse_metadata
 
 
 def _apply_fetched_content(article, metadata, html_content):
@@ -59,20 +59,21 @@ def fetch_doc_and_metadata(modeladmin, request, queryset):
 
 
 class ArticleAdminForm(forms.ModelForm):
-    """Renders the auto-generated fields as visibly read-only so editors
-    don't accidentally hand-edit something that gets overwritten on the
-    next fetch. This is a UI guardrail, not a hard server-side lock."""
+    """Edits the article text and preview in a WYSIWYG editor (TinyMCE)."""
 
     class Meta:
         model = Article
         fields = "__all__"
         widgets = {
-            "content_html": forms.Textarea(attrs={
-                "readonly": "readonly",
-                "rows": 20,
-                "style": "background:#f5f5f5; font-family: monospace; font-size: 11px;",
-            }),
+            "content_html": forms.Textarea(attrs={"class": "wysiwyg", "data-height": "700"}),
+            "preview_text": forms.Textarea(attrs={"class": "wysiwyg", "data-height": "250"}),
         }
+
+    class Media:
+        js = (
+            "https://cdn.jsdelivr.net/npm/tinymce@7.9.3/tinymce.min.js",
+            "newsletter/admin/editor.js",
+        )
 
 
 @admin.register(Article)
@@ -101,7 +102,6 @@ class ArticleAdmin(admin.ModelAdmin):
                 "short_title",
                 "writer",
                 "authors",
-                "preview_text",
                 "preview_image",
                 "hide_image_border",
                 "date",
@@ -112,39 +112,45 @@ class ArticleAdmin(admin.ModelAdmin):
                 "display_order",
             )
         }),
-        ("Article Content (Google Doc)", {
+        ("Preview", {
+            "description": "Shown under the title on the current issue page.",
+            "fields": ("preview_text",),
+        }),
+        ("Article text", {
             "description": (
-                "<strong>Step 1:</strong> Paste the full Google Doc link below and click "
-                "<em>Save</em> at the bottom of this page.<br>"
-                "<strong>Step 2:</strong> A “Fetch from Google Doc” button will appear "
-                "at the top-right of this page — click it to automatically pull in the "
-                "title, writer, date, and article text. You can click it again any time "
-                "after editing the Google Doc to re-sync this article.<br><br>"
-                "<strong>Footnotes:</strong> use Google Docs' built-in "
-                "<em>Insert &rarr; Footnote</em> tool. They're picked up automatically and "
-                "turned into clickable numbered links on the article page — no extra work "
-                "needed here.<br>"
-                "<strong>Images:</strong> just paste or drag them into the Google Doc "
-                "wherever you want them to appear — they'll be pulled in and resized "
-                "automatically when you fetch."
+                "Type or paste the article here. Pasting from Google Docs or Word keeps "
+                "most formatting. Pasted or inserted images are saved and resized "
+                "automatically when you click <em>Save</em>."
+            ),
+            "fields": ("content_html",),
+        }),
+        ("Optional: import from a Google Doc", {
+            "classes": ("collapse",),
+            "description": (
+                "Paste a Google Doc link here and click <em>Save</em>, then use "
+                "“Fetch from Google Doc” at the top-right. "
+                "<strong>Fetching replaces everything in the Article text box above.</strong>"
             ),
             "fields": ("doc_url",),
-        }),
-        ("Advanced (auto-generated, you shouldn't need this)", {
-            "classes": ("collapse",),
-            "fields": ("content_html",),
         }),
     )
 
     actions = [mark_as_current, mark_as_past, fetch_doc_and_metadata]
 
     def fetch_status(self, obj):
-        if not obj.doc_id:
-            return format_html('<span style="color:#888;">— no doc linked</span>')
         if obj.content_html.strip():
-            return format_html('<span style="color:#1a7f37; font-weight:bold;">&#10003; Has content</span>')
-        return format_html('<span style="color:#b45309; font-weight:bold;">&#9888; Not fetched yet</span>')
-    fetch_status.short_description = "Fetch Status"
+            return format_html('<span style="color:#1a7f37; font-weight:bold;">&#10003; Has text</span>')
+        return format_html('<span style="color:#b45309; font-weight:bold;">&#9888; No text yet</span>')
+    fetch_status.short_description = "Status"
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        # Images pasted into the editor arrive as base64 data URIs; store them
+        # as compressed files instead (needs obj.pk, hence after the first save).
+        converted = extract_and_save_inline_images(obj.content_html, obj.pk)
+        if converted != obj.content_html:
+            obj.content_html = converted
+            obj.save(update_fields=["content_html"])
 
     def get_urls(self):
         custom = [

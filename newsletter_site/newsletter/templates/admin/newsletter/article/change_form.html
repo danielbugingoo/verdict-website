@@ -4,7 +4,8 @@
 {% block object-tools-items %}
   {% if original %}
   <li>
-    <form method="post" action="{% url 'admin:newsletter_article_fetch_doc' original.pk %}" style="display:inline;">
+    <form method="post" action="{% url 'admin:newsletter_article_fetch_doc' original.pk %}" style="display:inline;"
+      onsubmit="return confirm('This replaces everything in the Article text box with the Google Doc. Continue?');">
       {% csrf_token %}
       <button type="submit"
         style="cursor:pointer; border:none; border-radius:15px; padding:3px 12px;

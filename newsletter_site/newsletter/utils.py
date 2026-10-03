@@ -35,6 +35,30 @@ DATE_REGEX = re.compile(r"^Date:\s*(.+)$", re.IGNORECASE)
 ISSUE_REGEX = re.compile(r"^Issue:\s*(\d+)$", re.IGNORECASE)
 TYPE_REGEX = re.compile(r"^Type of Article:\s*(.+)$", re.IGNORECASE)
 
+# Google's export puts all text in non-nested <span style="..."> runs.
+SPAN_REGEX = re.compile(r'<span\s+style="([^"]*)">(.*?)</span>', re.IGNORECASE | re.DOTALL)
+FONT_SIZE_REGEX = re.compile(r'font-size:\s*([\d.]+)pt', re.IGNORECASE)
+
+
+def _body_font_size(html):
+    """Most common span font size (in pt), weighted by amount of text."""
+    weights = {}
+    for style, inner in SPAN_REGEX.findall(html):
+        size = FONT_SIZE_REGEX.search(style)
+        text_len = len(re.sub(r'<[^>]+>|&nbsp;', '', inner).strip())
+        if size and text_len:
+            weights[size.group(1)] = weights.get(size.group(1), 0) + text_len
+    return float(max(weights, key=weights.get)) if weights else None
+
+
+def _relative_size(size_match, base_size):
+    """'font-size:1.25em' for a pt size relative to the body size, or None
+    when it matches the body size (or either is unknown)."""
+    if not size_match or not base_size:
+        return None
+    ratio = round(float(size_match.group(1)) / base_size, 2)
+    return None if ratio == 1 else f'font-size:{ratio:g}em'
+
 def strip_gdoc_html(raw_html: str) -> str:
     """
     Cleans up Google Docs HTML export to make it readable and styled with site CSS.
@@ -58,36 +82,63 @@ def strip_gdoc_html(raw_html: str) -> str:
     # Extract everything inside the <body>...</body>, removing the body tags themselves
     raw_html = re.sub(r'<body\b[^>]*>(.*?)</body>', r'\1', raw_html, flags=re.IGNORECASE|re.DOTALL)
 
-    # BEFORE removing styles, convert Google's italic/bold spans to semantic HTML
-    # Convert <span style="...font-style:italic...">text</span> to <em>text</em>
-    # Using non-greedy (.*?) to capture content including nested tags
-    raw_html = re.sub(
-        r'<span\s+style="[^"]*font-style:\s*italic[^"]*">(.*?)</span>',
-        r'<em>\1</em>',
-        raw_html,
-        flags=re.IGNORECASE | re.DOTALL
-    )
+    # Body text size = the most common span font size, weighted by text length.
+    # Other sizes are kept relative to it, so the doc's main text renders at
+    # the site's normal size whatever point size the doc happens to use.
+    base_size = _body_font_size(raw_html)
 
-    # Convert <span style="...font-weight:700...">text</span> to <strong>text</strong>
-    # Using non-greedy (.*?) to capture content including nested tags
-    raw_html = re.sub(
-        r'<span\s+style="[^"]*font-weight:\s*(?:700|bold)[^"]*">(.*?)</span>',
-        r'<strong>\1</strong>',
-        raw_html,
-        flags=re.IGNORECASE | re.DOTALL
-    )
+    # Wrap italic/bold span contents in <em>/<strong>, keeping the span itself
+    # so its font size survives the style cleanup below.
+    def mark_emphasis(match):
+        style, inner = match.group(1), match.group(2)
+        if re.search(r'font-style:\s*italic', style, re.IGNORECASE):
+            inner = f'<em>{inner}</em>'
+        if re.search(r'font-weight:\s*(?:700|bold)', style, re.IGNORECASE):
+            inner = f'<strong>{inner}</strong>'
+        return f'<span style="{style}">{inner}</span>'
 
-    # Remove inline style attributes EXCEPT text-align
-    # Keep text-align styles but remove everything else
-    def preserve_text_align(match):
-        style_content = match.group(1)
-        # Check if there's a text-align property
-        text_align_match = re.search(r'text-align:\s*[^;]+', style_content, re.IGNORECASE)
-        if text_align_match:
-            return f' style="{text_align_match.group(0)}"'
-        return ''
+    raw_html = SPAN_REGEX.sub(mark_emphasis, raw_html)
 
-    raw_html = re.sub(r'\s+style="([^"]*)"', preserve_text_align, raw_html, flags=re.IGNORECASE)
+    # Blank lines in the doc are empty paragraphs. Keep them as &nbsp; lines
+    # sized like the doc's blank line, instead of letting them be stripped as
+    # empty tags.
+    def keep_blank_line(match):
+        inner = match.group(1)
+        # Image-only paragraphs have no text but aren't blank.
+        if re.sub(r'<[^>]+>', '', inner).strip() or re.search(r'<img\b', inner, re.IGNORECASE):
+            return match.group(0)
+        size = FONT_SIZE_REGEX.search(inner)
+        return f'<p style="{_relative_size(size, base_size) or ""}">&nbsp;</p>'
+
+    raw_html = re.sub(r'<p\b[^>]*>(.*?)</p>', keep_blank_line, raw_html, flags=re.IGNORECASE | re.DOTALL)
+
+    # Strip inline styles down to the formatting worth keeping: alignment and
+    # indentation on block elements, relative font size on spans.
+    def keep_layout_styles(match):
+        tag, attrs, style = match.group(1), match.group(2), match.group(3)
+        kept = []
+        if tag.lower() == 'span':
+            size = _relative_size(FONT_SIZE_REGEX.search(style), base_size)
+            if size:
+                kept.append(size)
+        else:
+            for prop in ('text-align', 'margin-left', 'text-indent', 'font-size'):
+                m = re.search(rf'(?<![-\w]){prop}:\s*([^;]+)', style, re.IGNORECASE)
+                if not m or m.group(1).strip() in ('0', '0pt'):
+                    continue
+                # Paragraph-level font-size is Google's default, not what's
+                # displayed; only keep the em sizes set for blank lines above.
+                if prop == 'font-size' and not m.group(1).strip().endswith('em'):
+                    continue
+                kept.append(f'{prop}:{m.group(1).strip()}')
+        if not kept:
+            return f'<{tag}{attrs}'
+        return f'<{tag}{attrs} style="{"; ".join(kept)}"'
+
+    raw_html = re.sub(r'<(\w+)\b([^>]*?)\s+style="([^"]*)"', keep_layout_styles, raw_html, flags=re.IGNORECASE)
+
+    # Spans left with no styling are just noise.
+    raw_html = re.sub(r'<span>(.*?)</span>', r'\1', raw_html, flags=re.IGNORECASE | re.DOTALL)
 
     # Remove all class attributes (Google adds lots of junk classes)
     raw_html = re.sub(r'\s+class="[^"]*"', '', raw_html, flags=re.IGNORECASE)
@@ -129,7 +180,9 @@ def strip_gdoc_html(raw_html: str) -> str:
     # Remove horizontal rules that are just styling artifacts
     raw_html = re.sub(r'<hr[^>]*>', '<hr>', raw_html)
 
-    return raw_html.strip()
+    # Marks content cleaned by this version, whose spacing comes from the
+    # doc's own blank lines (see .gdoc in base.html) rather than paragraph margins.
+    return f'<div class="gdoc">{raw_html.strip()}</div>'
 
 
 def extract_and_save_inline_images(html: str, article_id) -> str:

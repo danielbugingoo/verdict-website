@@ -153,7 +153,7 @@ class Article(models.Model):
     # Google Doc fields
     doc_url      = models.TextField(
         blank=True,
-        help_text="Paste the full Google Doc link here, e.g. https://docs.google.com/document/d/XXXXXXXX/edit"
+        help_text="Optional. A Google Doc to import the article text from, e.g. https://docs.google.com/document/d/XXXXXXXX/edit"
     )
     doc_id       = models.CharField(
         max_length=255,
@@ -162,11 +162,7 @@ class Article(models.Model):
     )
     content_html = models.TextField(
         blank=True,
-        help_text=(
-            "Auto-generated when you click 'Fetch from Google Doc'. To change the "
-            "article text, edit the Google Doc itself and fetch again — edits made "
-            "directly in this box will be overwritten."
-        )
+        help_text="The article text shown on the article page.",
     )
 
     is_current_issue = models.BooleanField(default=False, db_index=True)
