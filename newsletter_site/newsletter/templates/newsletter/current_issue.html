@@ -18,12 +18,12 @@
       <img src="{{ article.title_image.url }}" alt="{{ article.title }}" style="max-height: 150px; border: 1.5pt solid rgb(224, 220, 209);">
     </div>
     {% else %}
-    <div style="background-color: #2B2D46; padding: 0.6rem 1rem; text-align: center; border-radius: 3px;">
-      <h3 style="color: white; margin: 0;">{{ article.title }}</h3>
-      <div style="color: rgba(255,255,255,0.75); font-size: 20px; margin-top: 0.3rem;">
+    <div style="padding: 0.6rem 1rem; text-align: center; border-radius: 3px;">
+      <h3 style="color: #000; margin: 0;">{{ article.title }}</h3>
+      <div style="color: #000; font-size: 20px; margin-top: 0.3rem;">
         by
         {% for author in article.authors.all %}
-          {{ author.name }}{% if not forloop.last %}, {% endif %}
+          <a href="{% url "author_detail" author.slug %}" style="color: #000;">{{ author.name }}</a>{% if not forloop.last %}, {% endif %}
         {% empty %}
           {{ article.writer }}
         {% endfor %}

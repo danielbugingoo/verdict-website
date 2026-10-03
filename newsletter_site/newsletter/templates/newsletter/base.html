@@ -65,7 +65,6 @@
       text-transform: lowercase;
     }
     #slim-nav .nav-link:hover { text-decoration: underline; }
-    #slim-nav .navbar-toggler { border-color: rgba(0,0,0,0.2); }
 
     /* Main content */
     .content-container {
@@ -80,7 +79,7 @@
     .footer {
       background-color: #ffffff;
       color: #000000;
-      border-top: 3px dotted #ccc;
+      border-top: 1pt solid rgba(133, 114, 108, 0.25); /* matches the article separators, which Bootstrap renders at 25% opacity */
       padding: 4rem 1rem 1rem;
       text-align: center;
     }
@@ -130,11 +129,7 @@
     </div>
     <nav id="slim-nav" class="navbar navbar-expand-md py-1">
       <div class="container justify-content-center">
-<button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
-                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-          <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse justify-content-center" id="navbarNav">
+        <div class="d-flex justify-content-center w-100" id="navbarNav">
           <ul class="navbar-nav text-center">
             <li class="nav-item mx-2"><a class="nav-link" href="{% url 'past_issues' %}">PAST ISSUES</a></li>
             <li class="nav-item mx-2"><a class="nav-link" href="{% url 'submissions' %}">SUBMISSIONS</a></li>
