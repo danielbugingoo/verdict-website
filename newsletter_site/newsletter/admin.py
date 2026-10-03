@@ -3,13 +3,18 @@
 from django import forms
 from django.contrib import admin, messages
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponseNotAllowed
+from django.http import HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import path, reverse
 from django.utils.html import format_html
 
 from .models import Author, Article, DOC_URL_REGEX
-from .utils import extract_and_save_inline_images, fetch_doc_and_parse_metadata
+from .utils import (
+    extract_and_save_inline_images,
+    fetch_doc_and_parse_metadata,
+    link_images_to_full_size,
+    save_uploaded_body_image,
+)
 
 
 def _apply_fetched_content(article, metadata, html_content):
@@ -68,6 +73,12 @@ class ArticleAdminForm(forms.ModelForm):
             "content_html": forms.Textarea(attrs={"class": "wysiwyg", "data-height": "700"}),
             "preview_text": forms.Textarea(attrs={"class": "wysiwyg", "data-height": "250"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        upload_url = reverse("admin:newsletter_article_upload_image")
+        for name in ("content_html", "preview_text"):
+            self.fields[name].widget.attrs["data-upload-url"] = upload_url
 
     class Media:
         js = (
@@ -148,6 +159,7 @@ class ArticleAdmin(admin.ModelAdmin):
         # Images pasted into the editor arrive as base64 data URIs; store them
         # as compressed files instead (needs obj.pk, hence after the first save).
         converted = extract_and_save_inline_images(obj.content_html, obj.pk)
+        converted = link_images_to_full_size(converted)
         if converted != obj.content_html:
             obj.content_html = converted
             obj.save(update_fields=["content_html"])
@@ -159,8 +171,28 @@ class ArticleAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.fetch_doc_view),
                 name="newsletter_article_fetch_doc",
             ),
+            path(
+                "upload-image/",
+                self.admin_site.admin_view(self.upload_image_view),
+                name="newsletter_article_upload_image",
+            ),
         ]
         return custom + super().get_urls()
+
+    def upload_image_view(self, request):
+        """Receives one image from the article editor (editor.js) and returns
+        the URL of its display copy as {"location": url}."""
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not self.has_change_permission(request) and not self.has_add_permission(request):
+            raise PermissionDenied
+        upload = request.FILES.get("file")
+        if upload is None:
+            return JsonResponse({"error": "No file received."}, status=400)
+        url = save_uploaded_body_image(upload.read())
+        if url is None:
+            return JsonResponse({"error": "That file isn't an image this site can read."}, status=400)
+        return JsonResponse({"location": url})
 
     def fetch_doc_view(self, request, object_id):
         if request.method != "POST":

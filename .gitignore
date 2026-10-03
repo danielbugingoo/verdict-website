@@ -17,3 +17,7 @@ secrets.json
 # Ignore service account credentials (IMPORTANT!)
 google-credentials.json
 *credentials*.json
+
+# Images uploaded through the article editor live only where they were
+# uploaded (production media), not in git.
+newsletter_site/media/article_body_images/uploads/

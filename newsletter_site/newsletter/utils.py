@@ -1,6 +1,7 @@
 # newsletter/utils.py
 import base64
 import hashlib
+import io
 import logging
 import re
 from datetime import datetime
@@ -10,8 +11,9 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from PIL import Image, ImageOps
 
-from .models import _compress_image_bytes
+from .models import BODY_IMAGE_MAX_PX, BODY_IMAGE_QUALITY, FULL_IMAGE_QUALITY, _compress_image_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +187,70 @@ def strip_gdoc_html(raw_html: str) -> str:
     return f'<div class="gdoc">{raw_html.strip()}</div>'
 
 
+UPLOAD_DIR = "article_body_images/uploads"
+
+
+def _full_resolution_bytes(raw):
+    """Every pixel of the original, re-saved as a quality-95 JPEG (camera
+    files are often saved at wastefully high quality). Keeps the original
+    bytes if that's not smaller, or for non-JPEGs (PNG transparency etc.)."""
+    img = Image.open(io.BytesIO(raw))
+    if img.format != "JPEG":
+        return raw, ".png" if img.format == "PNG" else ".jpg"
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=FULL_IMAGE_QUALITY, optimize=True)
+    resaved = buf.getvalue()
+    return (resaved if len(resaved) < len(raw) else raw), ".jpg"
+
+
+def save_uploaded_body_image(raw):
+    """Store an image inserted in the article editor. Saves a display copy
+    (BODY_IMAGE_MAX_PX, for the article page) and, when that copy lost
+    detail, a full-resolution copy at <name>_full.<ext> for readers to click
+    through to. Returns the display copy's URL, or None if raw isn't an image.
+    Named by content hash, so re-uploading the same photo reuses its files."""
+    display, ext = _compress_image_bytes(
+        raw, max_px=BODY_IMAGE_MAX_PX, quality=BODY_IMAGE_QUALITY, keep_under_bytes=1_500_000,
+    )
+    if display is None:
+        return None
+    name = f"{UPLOAD_DIR}/{hashlib.sha1(raw).hexdigest()[:16]}"
+    path = f"{name}{ext}"
+    if not default_storage.exists(path):
+        default_storage.save(path, ContentFile(display))
+    if display is not raw:
+        full, full_ext = _full_resolution_bytes(raw)
+        full_path = f"{name}_full{full_ext}"
+        if not default_storage.exists(full_path):
+            default_storage.save(full_path, ContentFile(full))
+    return default_storage.url(path)
+
+
+# An <img>, optionally already wrapped in a link (group 1).
+LINKABLE_IMG_REGEX = re.compile(r'(<a\b[^>]*>\s*)?(<img\b[^>]*\bsrc="([^"]+)"[^>]*>)', re.IGNORECASE)
+
+
+def link_images_to_full_size(html):
+    """Wrap each uploaded article image that has a full-resolution copy in a
+    link to it, so readers can click through to every pixel."""
+    media_prefix = f"{settings.MEDIA_URL}{UPLOAD_DIR}/"
+
+    def _wrap(match):
+        already_linked, img_tag, src = match.group(1), match.group(2), match.group(3)
+        if already_linked or not src.startswith(media_prefix):
+            return match.group(0)
+        stem = src[len(settings.MEDIA_URL):].rsplit(".", 1)[0]
+        for ext in (".jpg", ".png"):
+            full_path = f"{stem}_full{ext}"
+            if default_storage.exists(full_path):
+                url = default_storage.url(full_path)
+                return f'<a href="{url}" target="_blank" rel="noopener" class="full-size">{img_tag}</a>'
+        return match.group(0)
+
+    return LINKABLE_IMG_REGEX.sub(_wrap, html)
+
+
 def extract_and_save_inline_images(html: str, article_id) -> str:
     """
     Finds base64 data-URI <img> tags left over from Google Docs' HTML export
@@ -204,7 +270,13 @@ def extract_and_save_inline_images(html: str, article_id) -> str:
             logger.warning("Failed to decode an inline image in doc export; left as base64.")
             return match.group(0)
 
-        compressed, ext = _compress_image_bytes(raw)
+        compressed, ext = _compress_image_bytes(
+            raw,
+            max_px=BODY_IMAGE_MAX_PX,
+            quality=BODY_IMAGE_QUALITY,
+            # The editor already resized these; don't re-encode them again.
+            keep_under_bytes=5_000_000,
+        )
         if compressed is None:
             logger.warning("Failed to compress an inline image in doc export; left as base64.")
             return match.group(0)

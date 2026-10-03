@@ -5,23 +5,34 @@ import re
 from django.core.files.base import ContentFile
 from django.db import models
 from django.utils.text import slugify
-from PIL import Image
+from PIL import Image, ImageOps
 
 DOC_URL_REGEX = re.compile(r'/document/d/([^/]+)/')
 
 MAX_IMAGE_PX = 1200
 
-def _compress_image_bytes(raw_bytes, max_px=MAX_IMAGE_PX, quality=82):
+# Images inside article text (photo essays etc.) get a gentler limit: 2560px
+# is sharper than any screen shows in the article column. The editor resizes
+# to this in the browser before upload (static/newsletter/admin/editor.js).
+BODY_IMAGE_MAX_PX = 2560
+BODY_IMAGE_QUALITY = 90
+# Full-resolution copy that article photos link to (click to view full size).
+FULL_IMAGE_QUALITY = 95
+
+def _compress_image_bytes(raw_bytes, max_px=MAX_IMAGE_PX, quality=82, keep_under_bytes=300_000):
     """
     Resize/re-encode raw image bytes. Returns (bytes, ext) where ext is
     '.jpg' or '.png'. Returns (None, None) if the bytes can't be read as
-    an image.
+    an image. Images already within max_px and under keep_under_bytes are
+    returned unchanged.
     """
     try:
         img = Image.open(io.BytesIO(raw_bytes))
         orig_format = img.format or 'JPEG'
-        if img.width <= max_px and img.height <= max_px and len(raw_bytes) < 300_000:
+        if img.width <= max_px and img.height <= max_px and len(raw_bytes) < keep_under_bytes:
             return raw_bytes, ('.png' if orig_format == 'PNG' else '.jpg')
+        # Re-encoding drops EXIF, so apply camera rotation to the pixels first.
+        img = ImageOps.exif_transpose(img)
         img.thumbnail((max_px, max_px), Image.LANCZOS)
         if orig_format == 'PNG' and img.mode in ('RGBA', 'P'):
             fmt = 'PNG'

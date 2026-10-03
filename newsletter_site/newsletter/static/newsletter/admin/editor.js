@@ -1,7 +1,33 @@
 // Turns every <textarea class="wysiwyg"> on the article admin page into a
-// TinyMCE editor styled like the public article page. Pasted or inserted
-// images are embedded as base64 here; ArticleAdmin.save_model converts them
-// into compressed files under /media on save.
+// TinyMCE editor styled like the public article page. Inserted images are
+// uploaded one at a time, untouched, to ArticleAdmin.upload_image_view, which
+// stores a screen-sized copy for the article plus a full-resolution copy that
+// the photo links to once the article is saved.
+
+function csrfToken() {
+  var input = document.querySelector("input[name=csrfmiddlewaretoken]");
+  return input ? input.value : "";
+}
+
+// Uploads an image file/blob; resolves to the URL to use as its src.
+function uploadImage(uploadUrl, blob, filename) {
+  var form = new FormData();
+  form.append("file", blob, filename || "image");
+  return fetch(uploadUrl, {
+    method: "POST",
+    body: form,
+    headers: { "X-CSRFToken": csrfToken() },
+    credentials: "same-origin",
+  }).then(function (response) {
+    return response.json().catch(function () { return {}; }).then(function (data) {
+      if (!response.ok || !data.location) {
+        throw new Error(data.error || "Image upload failed (" + response.status + ").");
+      }
+      return data.location;
+    });
+  });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll("textarea.wysiwyg").forEach(function (textarea) {
     tinymce.init({
@@ -21,6 +47,10 @@ document.addEventListener("DOMContentLoaded", function () {
       convert_urls: false,
       paste_data_images: true,
       image_title: true,
+      // Pasted and dropped images (and the image dialog's Upload tab).
+      images_upload_handler: function (blobInfo) {
+        return uploadImage(textarea.dataset.uploadUrl, blobInfo.blob(), blobInfo.filename());
+      },
       file_picker_types: "image",
       file_picker_callback: function (callback) {
         var input = document.createElement("input");
@@ -28,9 +58,11 @@ document.addEventListener("DOMContentLoaded", function () {
         input.accept = "image/*";
         input.onchange = function () {
           var file = input.files[0];
-          var reader = new FileReader();
-          reader.onload = function () { callback(reader.result, { alt: file.name }); };
-          reader.readAsDataURL(file);
+          uploadImage(textarea.dataset.uploadUrl, file, file.name).then(function (url) {
+            callback(url, { alt: file.name.replace(/\.[^.]+$/, "") });
+          }).catch(function (err) {
+            alert(err.message);
+          });
         };
         input.click();
       },
