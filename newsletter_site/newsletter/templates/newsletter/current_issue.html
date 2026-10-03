@@ -20,14 +20,18 @@
     {% else %}
     <div style="padding: 0.6rem 1rem; text-align: center; border-radius: 3px;">
       <h3 style="color: #000; margin: 0;">{{ article.title }}</h3>
+      {% with authors=article.authors.all %}
+      {% if authors or article.writer.strip %}
       <div style="color: #000; font-size: 20px; margin-top: 0.3rem;">
         by
-        {% for author in article.authors.all %}
+        {% for author in authors %}
           <a href="{% url "author_detail" author.slug %}" style="color: #000;">{{ author.name }}</a>{% if not forloop.last %}, {% endif %}
         {% empty %}
           {{ article.writer }}
         {% endfor %}
       </div>
+      {% endif %}
+      {% endwith %}
     </div>
     {% endif %}
 <br>
