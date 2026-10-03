@@ -3,14 +3,6 @@
 
 {% block content %}
   <div class="text-center mb-5">
-    {% if author.headshot %}
-      <img
-        src="{{ author.headshot.url }}"
-        alt="{{ author.name }}"
-        class="img-fluid rounded-circle mb-3"
-        style="max-width:200px;"
-      >
-    {% endif %}
     <h1>{{ author.name }}</h1>
     <div style="font-size: 26px;">{{ author.get_role_display }}</div>
     <div class="mb-4">{{ author.bio|linebreaks }}</div>

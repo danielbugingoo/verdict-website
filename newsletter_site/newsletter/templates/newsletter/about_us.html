@@ -19,14 +19,6 @@
   <div class="row">
     {% for author in staff %}
       <div class="col-6 col-md-4 mb-4 text-center">
-        {% if author.headshot %}
-          <img
-            src="{{ author.headshot.url }}"
-            alt="{{ author.name }}"
-            class="img-fluid rounded-circle mb-2"
-            style="max-width:150px;"
-          >
-        {% endif %}
         <h5>
           <a href="{% url 'author_detail' author.slug %}">
             {{ author.name }}

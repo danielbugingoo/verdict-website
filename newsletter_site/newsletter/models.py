@@ -69,7 +69,6 @@ class Author(models.Model):
     name     = models.CharField(max_length=255, unique=True)
     slug     = models.SlugField(max_length=255, unique=True, blank=True)
     bio      = models.TextField(blank=True)
-    headshot = models.ImageField(upload_to='authors/', blank=True)
 
     # Article type choices
     ROLES = [
@@ -90,10 +89,7 @@ class Author(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.name)[:255]
-        old_headshot = Author.objects.filter(pk=self.pk).values_list('headshot', flat=True).first() if self.pk else None
         super().save(*args, **kwargs)
-        if self.headshot and self.headshot.name != old_headshot:
-            compress_image(self.headshot, max_px=600)
 
     def __str__(self):
         return self.name

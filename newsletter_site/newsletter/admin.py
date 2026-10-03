@@ -236,7 +236,7 @@ class ArticleAdmin(admin.ModelAdmin):
 class AuthorAdmin(admin.ModelAdmin):
     list_display = ("name", "slug", "role", "article_count")
     prepopulated_fields = {"slug": ("name",)}
-    fields = ("name", "slug", "role", "bio", "headshot")
+    fields = ("name", "slug", "role", "bio")
 
     def article_count(self, obj):
         return obj.articles.count()
